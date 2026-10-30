@@ -5,6 +5,7 @@ import (
 	"crypto/tls"
 	"errors"
 	"io"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"net/netip"
@@ -699,7 +700,7 @@ func TestCanCreateSSHConnection(t *testing.T) {
 
 func TestCheckSSHBanner(t *testing.T) {
 	t.Parallel()
-	cfg := &Config{Timeout: 3}
+	cfg := &Config{Timeout: 3 * time.Second}
 	t.Run("no-auth-ssh", func(t *testing.T) {
 		connected, status, err := CheckSSHBanner("tty.sdf.org", cfg)
 		if err != nil {
@@ -724,4 +725,53 @@ func TestCheckSSHBanner(t *testing.T) {
 			t.Errorf("Expected: 1, got: %v", status)
 		}
 	})
+}
+
+func TestCheckSSHBannerRespectsTimeout(t *testing.T) {
+	t.Parallel()
+	// 10.255.255.1 is not routable, so the TCP handshake never completes and only the
+	// client timeout can stop the dial.
+	cfg := &Config{Timeout: 500 * time.Millisecond}
+	start := time.Now()
+	connected, status, err := CheckSSHBanner("10.255.255.1:22", cfg)
+	elapsed := time.Since(start)
+	if err == nil {
+		t.Error("Expected an error, got nil")
+	}
+	if connected {
+		t.Error("Expected connected == false, got true")
+	}
+	if status != 1 {
+		t.Errorf("Expected status 1, got %d", status)
+	}
+	if elapsed > 5*time.Second {
+		t.Errorf("Expected the dial to give up after the %s client timeout, took %s", cfg.Timeout, elapsed)
+	}
+}
+
+func TestCheckSSHBannerWithLocalServer(t *testing.T) {
+	t.Parallel()
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("failed to listen: %v", err)
+	}
+	defer listener.Close()
+	go func() {
+		conn, err := listener.Accept()
+		if err != nil {
+			return
+		}
+		defer conn.Close()
+		_, _ = conn.Write([]byte("SSH-2.0-gatus-test\r\n"))
+	}()
+	connected, status, err := CheckSSHBanner(listener.Addr().String(), &Config{Timeout: 3 * time.Second})
+	if err != nil {
+		t.Errorf("Expected no error, got %v", err)
+	}
+	if !connected {
+		t.Error("Expected connected == true, got false")
+	}
+	if status != 0 {
+		t.Errorf("Expected status 0, got %d", status)
+	}
 }

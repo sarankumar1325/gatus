@@ -318,6 +318,9 @@ func CheckSSHBanner(address string, cfg *Config) (bool, int, error) {
 		port = "22"
 	}
 	dialer := net.Dialer{}
+	if cfg != nil {
+		dialer.Timeout = cfg.Timeout
+	}
 	connStr := net.JoinHostPort(address, port)
 	conn, err := dialer.Dial("tcp", connStr)
 	if err != nil {
